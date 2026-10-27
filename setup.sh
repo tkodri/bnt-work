@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 #  BNT Work Setup — one-liner Blocknet worker deploy
-#  Usage:  curl -sL https://raw.githubusercontent.com/tkodri/bnt-work/main/setup.sh | bash -s <worker_name>
+#  Usage:  curl -sL https://raw.githubusercontent.com/tkodri/bnt-work/main/setup.sh | bash -s <worker_name> [threads]
 #  Example: curl -sL https://raw.githubusercontent.com/tkodri/bnt-work/main/setup.sh | bash -s vps1
 #
 #  No private keys needed. Public address only.
@@ -11,7 +11,7 @@ set -e
 
 WORKER="${1:-$(hostname)}"
 ADDR="9eQxRUhiGUQszhnq58omrQHyfhbsSq2hjbhgoCk5gqp7LcCwVvTxYbvpRJvdJQkCzx5WUrkNNHb4MqjZ1hWna74PUpbFg"
-THREADS="${2:-10}"
+THREADS="${2:-$(nproc)}"
 POOL="stratum+tcp://bntpool.com:3333"
 BASE="/opt/blocknet"
 WORK="$BASE/work"
