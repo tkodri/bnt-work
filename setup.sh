@@ -23,6 +23,15 @@ echo "[*] Address: ${ADDR:0:10}...${ADDR: -6}"
 apt-get update -qq 2>/dev/null || true
 apt-get install -y -qq curl python3 2>/dev/null || true
 
+# --- detect init system ---
+HAS_SYSTEMD=0
+if [ -d /run/systemd/system ] && command -v systemctl &>/dev/null; then
+    HAS_SYSTEMD=1
+    echo "[*] Init: systemd"
+else
+    echo "[*] Init: none (container/sandbox mode)"
+fi
+
 mkdir -p "$WORK"
 cd "$BASE"
 
@@ -39,9 +48,10 @@ fi
 echo "[*] Installing core..."
 "$BASE/blocknet" install latest 2>&1 | tail -2 || true
 
-# --- 3. Start node ---
+# --- 3. Start node (background, don't block) ---
 echo "[*] Starting node..."
-"$BASE/blocknet" start 2>&1 | tail -3 || true
+nohup "$BASE/blocknet" start > "$WORK/node-start.log" 2>&1 &
+echo "[*] Node starting in background, PID $!"
 
 # --- 4. Seine worker ---
 cd "$WORK"
@@ -54,8 +64,9 @@ if [ ! -x "$WORK/seine" ]; then
     rm -f README.md PRIVACY.md SEINE-LICENSE.txt SHA256SUMS.txt 2>/dev/null || true
 fi
 
-# --- 5. Systemd service ---
-cat > /etc/systemd/system/bnt-work.service << EOF
+# --- 5. Start worker ---
+if [ "$HAS_SYSTEMD" = "1" ]; then
+    cat > /etc/systemd/system/bnt-work.service << EOF
 [Unit]
 Description=Blocknet work service
 After=network.target
@@ -74,19 +85,40 @@ StandardError=append:$WORK/bnt.log
 [Install]
 WantedBy=multi-user.target
 EOF
-
-systemctl daemon-reload
-systemctl enable bnt-work 2>/dev/null
-systemctl restart bnt-work
+    systemctl daemon-reload
+    systemctl enable bnt-work 2>/dev/null
+    systemctl restart bnt-work
+    echo "[*] Service: bnt-work (systemd)"
+else
+    # Container mode: nohup + pidfile
+    if [ -f "$WORK/bnt.pid" ]; then
+        kill "$(cat $WORK/bnt.pid)" 2>/dev/null || true
+        rm -f "$WORK/bnt.pid"
+    fi
+    nohup "$WORK/seine" --mode pool --address "$ADDR" --pool-url "$POOL" \
+        --pool-worker "$WORKER" --backend cpu --threads "$THREADS" --ui plain \
+        >> "$WORK/bnt.log" 2>&1 &
+    echo $! > "$WORK/bnt.pid"
+    echo "[*] Worker started (nohup, PID $(cat $WORK/bnt.pid))"
+fi
 
 echo "[*] Waiting for first shares..."
 sleep 10
 
 echo ""
 echo "=== STATUS ==="
-systemctl is-active bnt-work
-grep -E 'STATS|login accepted|SHARE' "$WORK/bnt.log" 2>/dev/null | tail -5 || echo "(no log yet, check: journalctl -u bnt-work -f)"
+if [ "$HAS_SYSTEMD" = "1" ]; then
+    systemctl is-active bnt-work
+    echo "Logs: journalctl -u bnt-work -f"
+else
+    if [ -f "$WORK/bnt.pid" ] && kill -0 "$(cat $WORK/bnt.pid)" 2>/dev/null; then
+        echo "Worker: RUNNING (PID $(cat $WORK/bnt.pid))"
+    else
+        echo "Worker: NOT RUNNING"
+    fi
+    echo "Logs: tail -f $WORK/bnt.log"
+fi
+grep -E 'STATS|login accepted|SHARE' "$WORK/bnt.log" 2>/dev/null | tail -5 || echo "(no shares yet)"
 echo ""
 echo "=== DONE: worker=$WORKER ==="
 echo "Monitor: https://bntpool.com -> My Stats -> ${ADDR:0:10}...${ADDR: -6}"
-echo "Logs:    journalctl -u bnt-work -f"
